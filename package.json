@@ -1,0 +1,15 @@
+{
+  "name": "sanderbox-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Robo que le os grupos de ofertas no Telegram e envia pro app Sanderbox (roda no GitHub Actions).",
+  "scripts": {
+    "login": "node login.mjs",
+    "monitor": "node monitor.mjs"
+  },
+  "dependencies": {
+    "telegram": "^2.22.2",
+    "input": "^1.0.1"
+  }
+}
