@@ -136,7 +136,7 @@ for (const src of sources) {
       // Mercado Livre agora é manual — mandamos o link limpo; o admin cola
       // o link de afiliado depois no painel "Links Pendentes ML".
       await ingest({
-        source_ref: String(src.id),
+        source_id: String(src.id),
         raw_text: text,
         url,
         price: parsePrice(text),
@@ -156,3 +156,4 @@ for (const src of sources) {
 
 await client.disconnect();
 process.exit(0);
+
