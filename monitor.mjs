@@ -1,7 +1,11 @@
-// monitor.mjs — roda a cada ~10 min no GitHub Actions.
-// A cada execução: busca os grupos ativos no Supabase (tabela sources), lê as
-// mensagens NOVAS de cada um (id > last_seen_id), extrai link/preço/cupom/condições
-// e manda pro endpoint /ingest do app. Depois atualiza o last_seen_id de cada grupo.
+// monitor.mjs — roda a cada ~5 min no GitHub Actions.
+// A cada execução:
+//  1. busca os grupos ativos no Supabase (tabela sources)
+//  2. lê as mensagens novas de cada um (id > last_seen_id)
+//  3. extrai link/preço/cupom/condições e envia pro endpoint /api/public/ingest
+//  4. atualiza last_seen_id e reporta métricas em /api/public/metrics
+//
+// Todas as chamadas de rede usam fetchWithRetry (timeout 15s + backoff exponencial).
 
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
@@ -14,11 +18,14 @@ const {
   INGEST_SECRET,
   SUPABASE_URL,
   SUPABASE_SERVICE_KEY,
+  METRICS_URL, // opcional — se ausente, derivamos do INGEST_URL
 } = process.env;
 
 for (const [k, v] of Object.entries({ API_ID, API_HASH, TG_SESSION, INGEST_URL, INGEST_SECRET, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
   if (!v) { console.error("Faltando variável de ambiente:", k); process.exit(1); }
 }
+
+const METRICS_ENDPOINT = METRICS_URL || INGEST_URL.replace(/\/ingest\/?$/, "/metrics");
 
 const sbHeaders = {
   apikey: SUPABASE_SERVICE_KEY,
@@ -37,14 +44,34 @@ function parsePrice(text) {
   return Number(m[1].replace(/\./g, "").replace(",", "."));
 }
 
+// fetch com timeout de 15s e retry exponencial (0.5s → 1s → 2s).
+async function fetchWithRetry(url, init = {}, tries = 3) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const res = await fetch(url, { ...init, signal: controller.signal });
+      clearTimeout(t);
+      if (res.status >= 500) throw new Error(`HTTP ${res.status}`);
+      return res;
+    } catch (e) {
+      clearTimeout(t);
+      lastErr = e;
+      if (i < tries - 1) await new Promise(r => setTimeout(r, 500 * Math.pow(2, i)));
+    }
+  }
+  throw lastErr;
+}
+
 async function getSources() {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/sources?active=eq.true&select=id,telegram_ref,last_seen_id`, { headers: sbHeaders });
+  const res = await fetchWithRetry(`${SUPABASE_URL}/rest/v1/sources?active=eq.true&select=id,telegram_ref,last_seen_id`, { headers: sbHeaders });
   if (!res.ok) throw new Error("Erro ao buscar sources: " + res.status);
   return res.json();
 }
 
 async function updateLastSeen(id, lastSeenId) {
-  await fetch(`${SUPABASE_URL}/rest/v1/sources?id=eq.${id}`, {
+  await fetchWithRetry(`${SUPABASE_URL}/rest/v1/sources?id=eq.${id}`, {
     method: "PATCH",
     headers: { ...sbHeaders, Prefer: "return=minimal" },
     body: JSON.stringify({ last_seen_id: lastSeenId }),
@@ -52,12 +79,28 @@ async function updateLastSeen(id, lastSeenId) {
 }
 
 async function ingest(payload) {
-  const res = await fetch(INGEST_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-ingest-secret": INGEST_SECRET },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) console.error("Falha no /ingest:", res.status, await res.text());
+  try {
+    const res = await fetchWithRetry(INGEST_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-ingest-secret": INGEST_SECRET },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) console.error("Falha no /ingest:", res.status, await res.text());
+  } catch (e) {
+    console.error("Falha no /ingest (rede):", e.message);
+  }
+}
+
+async function reportMetrics(source_id, total_mensagens, total_ofertas_extraidas) {
+  try {
+    await fetchWithRetry(METRICS_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-ingest-secret": INGEST_SECRET },
+      body: JSON.stringify({ source_id, total_mensagens, total_ofertas_extraidas }),
+    });
+  } catch (e) {
+    console.error("Falha em /metrics:", e.message);
+  }
 }
 
 const sources = await getSources();
@@ -72,12 +115,15 @@ for (const src of sources) {
     const messages = await client.getMessages(src.telegram_ref, { limit: 40 });
     const novas = messages.filter((m) => m.id > lastId).reverse(); // cronológico
     let maxId = lastId;
+    let ofertas = 0;
 
     for (const m of novas) {
       maxId = Math.max(maxId, m.id);
       const text = m.message || "";
       const url = text.match(URL_RE)?.[0];
       if (!url) continue;
+      // Mercado Livre agora é manual — mandamos o link limpo; o admin cola
+      // o link de afiliado depois no painel "Links Pendentes ML".
       await ingest({
         source_ref: String(src.id),
         raw_text: text,
@@ -86,10 +132,12 @@ for (const src of sources) {
         coupon_code: text.match(COUPON_RE)?.[1] || null,
         coupon_conditions: text.match(COND_RE)?.[0] || null,
       });
+      ofertas++;
     }
 
     if (maxId > lastId) await updateLastSeen(src.id, maxId);
-    console.log(`Grupo ${src.telegram_ref}: ${novas.length} mensagens novas processadas.`);
+    await reportMetrics(src.id, novas.length, ofertas);
+    console.log(`Grupo ${src.telegram_ref}: ${novas.length} msg / ${ofertas} ofertas.`);
   } catch (e) {
     console.error(`Erro no grupo ${src.telegram_ref}:`, e.message);
   }
