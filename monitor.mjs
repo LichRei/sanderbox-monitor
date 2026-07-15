@@ -5,6 +5,8 @@
 //  3. extrai link/preço/cupom/condições e envia pro endpoint /api/public/ingest
 //  4. atualiza last_seen_id e reporta métricas em /api/public/metrics
 //
+// Se last_seen_id == 0, faz apenas baseline: grava o id mais recente sem processar.
+//
 // Todas as chamadas de rede usam fetchWithRetry (timeout 15s + backoff exponencial).
 
 import { TelegramClient } from "telegram";
@@ -44,7 +46,6 @@ function parsePrice(text) {
   return Number(m[1].replace(/\./g, "").replace(",", "."));
 }
 
-// fetch com timeout de 15s e retry exponencial (0.5s → 1s → 2s).
 async function fetchWithRetry(url, init = {}, tries = 3) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
@@ -113,6 +114,16 @@ for (const src of sources) {
   try {
     const lastId = src.last_seen_id || 0;
     const messages = await client.getMessages(src.telegram_ref, { limit: 40 });
+
+    // Baseline: se last_seen_id == 0, só grava o id mais recente sem processar nada.
+    if (lastId === 0) {
+      const maxId = messages.reduce((acc, m) => Math.max(acc, m.id), 0);
+      if (maxId > 0) await updateLastSeen(src.id, maxId);
+      await reportMetrics(src.id, 0, 0);
+      console.log(`Grupo ${src.telegram_ref}: baseline definido em id ${maxId} (sem processar).`);
+      continue;
+    }
+
     const novas = messages.filter((m) => m.id > lastId).reverse(); // cronológico
     let maxId = lastId;
     let ofertas = 0;
