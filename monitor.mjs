@@ -129,10 +129,9 @@ for (const src of sources) {
     let ofertas = 0;
 
     for (const m of novas) {
-      maxId = Math.max(maxId, m.id);
       const text = m.message || "";
       const url = text.match(URL_RE)?.[0];
-      if (!url) continue;
+      if (!url) { maxId = Math.max(maxId, m.id); await updateLastSeen(src.id, maxId); continue; }
       // Mercado Livre agora é manual — mandamos o link limpo; o admin cola
       // o link de afiliado depois no painel "Links Pendentes ML".
       await ingest({
@@ -142,11 +141,14 @@ for (const src of sources) {
         price: parsePrice(text),
         coupon_code: text.match(COUPON_RE)?.[1] || null,
         coupon_conditions: text.match(COND_RE)?.[0] || null,
+        telegram_message_id: m.id,
+        telegram_chat_id: String(src.telegram_chat_id ?? src.telegram_ref),
       });
       ofertas++;
+      maxId = Math.max(maxId, m.id);
+      await updateLastSeen(src.id, maxId);
     }
 
-    if (maxId > lastId) await updateLastSeen(src.id, maxId);
     await reportMetrics(src.id, novas.length, ofertas);
     console.log(`Grupo ${src.telegram_ref}: ${novas.length} msg / ${ofertas} ofertas.`);
   } catch (e) {
