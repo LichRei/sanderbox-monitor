@@ -18,21 +18,23 @@ const {
   TG_SESSION,
   INGEST_URL,
   INGEST_SECRET,
-  SUPABASE_URL,
-  SUPABASE_SERVICE_KEY,
   METRICS_URL, // opcional — se ausente, derivamos do INGEST_URL
+  SOURCES_URL, // opcional — se ausente, derivamos do INGEST_URL
 } = process.env;
 
-for (const [k, v] of Object.entries({ API_ID, API_HASH, TG_SESSION, INGEST_URL, INGEST_SECRET, SUPABASE_URL, SUPABASE_SERVICE_KEY })) {
+for (const [k, v] of Object.entries({ API_ID, API_HASH, TG_SESSION, INGEST_URL, INGEST_SECRET })) {
   if (!v) { console.error("Faltando variável de ambiente:", k); process.exit(1); }
 }
 
 const METRICS_ENDPOINT = METRICS_URL || INGEST_URL.replace(/\/ingest\/?$/, "/metrics");
+const SOURCES_ENDPOINT = SOURCES_URL || INGEST_URL.replace(/\/ingest\/?$/, "/sources");
 
-const sbHeaders = {
-  apikey: SUPABASE_SERVICE_KEY,
-  Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
+// Todas as leituras e escritas passam pelo app, autenticadas pelo mesmo
+// segredo do /ingest. O robô não fala mais direto com o banco, então a
+// service_role key deixou de ser necessária (e saiu dos secrets).
+const appHeaders = {
   "Content-Type": "application/json",
+  "x-ingest-secret": INGEST_SECRET,
 };
 
 const URL_RE = /https?:\/\/\S+/;
@@ -66,17 +68,19 @@ async function fetchWithRetry(url, init = {}, tries = 3) {
 }
 
 async function getSources() {
-  const res = await fetchWithRetry(`${SUPABASE_URL}/rest/v1/sources?active=eq.true&select=id,telegram_ref,last_seen_id`, { headers: sbHeaders });
-  if (!res.ok) throw new Error("Erro ao buscar sources: " + res.status);
-  return res.json();
+  const res = await fetchWithRetry(SOURCES_ENDPOINT, { headers: appHeaders });
+  if (!res.ok) throw new Error("Erro ao buscar sources: " + res.status + " " + (await res.text()));
+  const body = await res.json();
+  return Array.isArray(body) ? body : (body.sources ?? []);
 }
 
 async function updateLastSeen(id, lastSeenId) {
-  await fetchWithRetry(`${SUPABASE_URL}/rest/v1/sources?id=eq.${id}`, {
-    method: "PATCH",
-    headers: { ...sbHeaders, Prefer: "return=minimal" },
-    body: JSON.stringify({ last_seen_id: lastSeenId }),
+  const res = await fetchWithRetry(SOURCES_ENDPOINT, {
+    method: "POST",
+    headers: appHeaders,
+    body: JSON.stringify({ source_id: id, last_seen_id: lastSeenId }),
   });
+  if (!res.ok) console.error("Falha ao gravar last_seen_id:", res.status, await res.text());
 }
 
 async function ingest(payload) {
