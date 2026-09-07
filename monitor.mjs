@@ -1,4 +1,4 @@
-// monitor.mjs — roda a cada ~5 min no GitHub Actions.
+// monitor.mjs — roda a cada 30 min no GitHub Actions.
 // A cada execução:
 //  1. busca os grupos ativos no Supabase (tabela sources)
 //  2. lê as mensagens novas de cada um (id > last_seen_id)
