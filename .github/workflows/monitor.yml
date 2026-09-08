@@ -26,8 +26,8 @@ jobs:
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
+          # Fonte de verdade para as três rotas públicas; não depende de URL legada em secret.
+          SANDERBOX_URL: https://sanderbox.online
           INGEST_URL: ${{ secrets.INGEST_URL }}
           METRICS_URL: ${{ secrets.METRICS_URL }}
           INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
