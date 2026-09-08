@@ -20,14 +20,21 @@ const {
   INGEST_SECRET,
   METRICS_URL, // opcional — se ausente, derivamos do INGEST_URL
   SOURCES_URL, // opcional — se ausente, derivamos do INGEST_URL
+  SANDERBOX_URL, // endereço canônico do app; evita depender de URL antiga nos secrets
 } = process.env;
 
-for (const [k, v] of Object.entries({ API_ID, API_HASH, TG_SESSION, INGEST_URL, INGEST_SECRET })) {
+const BASE_URL = SANDERBOX_URL?.replace(/\/+$/, "");
+const INGEST_ENDPOINT = BASE_URL ? `${BASE_URL}/api/public/ingest` : INGEST_URL;
+const METRICS_ENDPOINT = METRICS_URL || (BASE_URL
+  ? `${BASE_URL}/api/public/metrics`
+  : INGEST_ENDPOINT?.replace(/\/ingest\/?$/, "/metrics"));
+const SOURCES_ENDPOINT = SOURCES_URL || (BASE_URL
+  ? `${BASE_URL}/api/public/sources`
+  : INGEST_ENDPOINT?.replace(/\/ingest\/?$/, "/sources"));
+
+for (const [k, v] of Object.entries({ API_ID, API_HASH, TG_SESSION, INGEST_ENDPOINT, INGEST_SECRET })) {
   if (!v) { console.error("Faltando variável de ambiente:", k); process.exit(1); }
 }
-
-const METRICS_ENDPOINT = METRICS_URL || INGEST_URL.replace(/\/ingest\/?$/, "/metrics");
-const SOURCES_ENDPOINT = SOURCES_URL || INGEST_URL.replace(/\/ingest\/?$/, "/sources");
 
 // Todas as leituras e escritas passam pelo app, autenticadas pelo mesmo
 // segredo do /ingest. O robô não fala mais direto com o banco, então a
@@ -85,7 +92,7 @@ async function updateLastSeen(id, lastSeenId) {
 
 async function ingest(payload) {
   try {
-    const res = await fetchWithRetry(INGEST_URL, {
+    const res = await fetchWithRetry(INGEST_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-ingest-secret": INGEST_SECRET },
       body: JSON.stringify(payload),
