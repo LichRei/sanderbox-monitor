@@ -13,7 +13,7 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 4       # mata a execução se travar
+    timeout-minutes: 12      # permite processar picos; chamadas individuais mantêm timeout de 15s
     concurrency:
       group: sanderbox-monitor
       cancel-in-progress: false
