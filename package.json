@@ -6,7 +6,8 @@
   "description": "Robo que le os grupos de ofertas no Telegram e envia pro app Sanderbox (roda no GitHub Actions).",
   "scripts": {
     "login": "node login.mjs",
-    "monitor": "node monitor.mjs"
+    "monitor": "node monitor.mjs",
+    "test": "node --test offer-blocks.test.mjs"
   },
   "dependencies": {
     "telegram": "^2.22.2",
