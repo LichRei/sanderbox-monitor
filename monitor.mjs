@@ -11,6 +11,7 @@
 
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
+import { extractOfferBlocks } from "./offer-blocks.mjs";
 
 const {
   API_ID,
@@ -44,7 +45,6 @@ const appHeaders = {
   "x-ingest-secret": INGEST_SECRET,
 };
 
-const URL_RE = /https?:\/\/\S+/;
 const PRICE_RE = /R\$\s?([\d.]+,\d{2})/i;
 const COUPON_RE = /cupom[:\s]+([A-Z0-9]{4,})/i;
 const COND_RE = /(à vista|no pix|em at[eé] \d+x(?: sem juros)?|sem juros)/i;
@@ -141,21 +141,26 @@ for (const src of sources) {
 
     for (const m of novas) {
       const text = m.message || "";
-      const url = text.match(URL_RE)?.[0];
-      if (!url) { maxId = Math.max(maxId, m.id); await updateLastSeen(src.id, maxId); continue; }
-      // Mercado Livre agora é manual — mandamos o link limpo; o admin cola
-      // o link de afiliado depois no painel "Links Pendentes ML".
-      await ingest({
-        source_id: String(src.id),
-        raw_text: text,
-        url,
-        price: parsePrice(text),
-        coupon_code: text.match(COUPON_RE)?.[1] || null,
-        coupon_conditions: text.match(COND_RE)?.[0] || null,
-        telegram_message_id: m.id,
-        telegram_chat_id: String(src.telegram_chat_id ?? src.telegram_ref),
-      });
-      ofertas++;
+      const blocks = extractOfferBlocks(text);
+      if (blocks.length === 0) { maxId = Math.max(maxId, m.id); await updateLastSeen(src.id, maxId); continue; }
+
+      // Uma mensagem pode trazer várias HQs. Cada bloco segue isolado para o
+      // ingest: preço, cupom, IA e título são analisados por produto, sem o
+      // primeiro valor da mensagem contaminar os demais.
+      for (const [itemIndex, block] of blocks.entries()) {
+        await ingest({
+          source_id: String(src.id),
+          raw_text: block.text,
+          url: block.url,
+          price: parsePrice(block.text),
+          coupon_code: block.text.match(COUPON_RE)?.[1] || null,
+          coupon_conditions: block.text.match(COND_RE)?.[0] || null,
+          telegram_message_id: m.id,
+          telegram_chat_id: String(src.telegram_chat_id ?? src.telegram_ref),
+          telegram_item_index: itemIndex,
+        });
+        ofertas++;
+      }
       maxId = Math.max(maxId, m.id);
       await updateLastSeen(src.id, maxId);
     }
@@ -169,4 +174,3 @@ for (const src of sources) {
 
 await client.disconnect();
 process.exit(0);
-
