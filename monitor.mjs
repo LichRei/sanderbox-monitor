@@ -17,6 +17,7 @@ const {
   API_ID,
   API_HASH,
   TG_SESSION,
+  TELEGRAM_READ_ONLY,
   INGEST_URL,
   INGEST_SECRET,
   METRICS_URL, // opcional — se ausente, derivamos do INGEST_URL
@@ -127,6 +128,11 @@ try {
       break;
     }
     try {
+      if (TELEGRAM_READ_ONLY === "1") {
+        await client.getMessages(source.telegram_ref, { limit: 1 });
+        console.log(`Grupo ${source.telegram_ref}: leitura validada.`);
+        continue;
+      }
       const result = await processSource({
         client,
         source,
