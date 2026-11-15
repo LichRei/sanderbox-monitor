@@ -7,7 +7,7 @@
   "scripts": {
     "login": "node login.mjs",
     "monitor": "node monitor.mjs",
-    "test": "node --test offer-blocks.test.mjs"
+    "test": "node --test"
   },
   "dependencies": {
     "telegram": "^2.22.2",
