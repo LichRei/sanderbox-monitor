@@ -11,6 +11,6 @@
   },
   "dependencies": {
     "input": "^1.0.1",
-    "telegram": "2.26.21"
+    "telegram": "2.26.22"
   }
 }

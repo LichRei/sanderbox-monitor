@@ -5,6 +5,11 @@ on:
   schedule:
     - cron: "*/30 * * * *"   # a cada 30 minutos
   workflow_dispatch:
+    inputs:
+      validate_only:
+        description: "Testar acesso às fontes do Telegram em modo somente leitura"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -35,3 +40,4 @@ jobs:
           INGEST_URL: ${{ secrets.INGEST_URL }}
           METRICS_URL: ${{ secrets.METRICS_URL }}
           INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
+          TELEGRAM_READ_ONLY: ${{ inputs.validate_only && '1' || '0' }}
