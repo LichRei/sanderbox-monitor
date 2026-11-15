@@ -7,11 +7,11 @@
 //
 // Se last_seen_id == 0, faz apenas baseline: grava o id mais recente sem processar.
 //
-// Todas as chamadas de rede usam fetchWithRetry (timeout 15s + backoff exponencial).
+// As chamadas ao site têm timeout e retentativas limitadas.
 
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
-import { extractOfferBlocks } from "./offer-blocks.mjs";
+import { processSource } from "./process-source.mjs";
 
 const {
   API_ID,
@@ -45,132 +45,103 @@ const appHeaders = {
   "x-ingest-secret": INGEST_SECRET,
 };
 
-const PRICE_RE = /R\$\s?([\d.]+,\d{2})/i;
-const COUPON_RE = /cupom[:\s]+([A-Z0-9]{4,})/i;
-const COND_RE = /(à vista|no pix|em at[eé] \d+x(?: sem juros)?|sem juros)/i;
-
-function parsePrice(text) {
-  const m = text.match(PRICE_RE);
-  if (!m) return null;
-  return Number(m[1].replace(/\./g, "").replace(",", "."));
-}
-
-async function fetchWithRetry(url, init = {}, tries = 3) {
-  let lastErr;
+async function requestJson(url, init, { timeoutMs = 15_000, tries = 2 } = {}) {
   for (let i = 0; i < tries; i++) {
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 15_000);
     try {
-      const res = await fetch(url, { ...init, signal: controller.signal });
-      clearTimeout(t);
+      const res = await fetch(url, {
+        ...init,
+        headers: appHeaders,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
       if (res.status >= 500) throw new Error(`HTTP ${res.status}`);
-      return res;
-    } catch (e) {
-      clearTimeout(t);
-      lastErr = e;
-      if (i < tries - 1) await new Promise(r => setTimeout(r, 500 * Math.pow(2, i)));
+      // Não repetir erros permanentes nem ingestão em andamento.
+      if (!res.ok) return { status: res.status, body: null };
+      return { status: res.status, body: await res.json() };
+    } catch (err) {
+      if (i === tries - 1) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 800));
     }
   }
-  throw lastErr;
+}
+
+function requireOk(response, endpoint) {
+  if (response.body?.ok !== true) throw new Error(`${endpoint}: HTTP ${response.status} sem confirmação`);
 }
 
 async function getSources() {
-  const res = await fetchWithRetry(SOURCES_ENDPOINT, { headers: appHeaders });
-  if (!res.ok) throw new Error("Erro ao buscar sources: " + res.status + " " + (await res.text()));
-  const body = await res.json();
-  return Array.isArray(body) ? body : (body.sources ?? []);
+  const { body, status } = await requestJson(SOURCES_ENDPOINT);
+  const sources = Array.isArray(body) ? body : body?.sources;
+  if (!Array.isArray(sources)) throw new Error(`Falha ao buscar fontes: HTTP ${status}`);
+  return sources;
 }
 
 async function updateLastSeen(id, lastSeenId) {
-  const res = await fetchWithRetry(SOURCES_ENDPOINT, {
+  const response = await requestJson(SOURCES_ENDPOINT, {
     method: "POST",
-    headers: appHeaders,
     body: JSON.stringify({ source_id: id, last_seen_id: lastSeenId }),
   });
-  if (!res.ok) console.error("Falha ao gravar last_seen_id:", res.status, await res.text());
+  requireOk(response, "checkpoint");
 }
 
 async function ingest(payload) {
-  try {
-    const res = await fetchWithRetry(INGEST_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-ingest-secret": INGEST_SECRET },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) console.error("Falha no /ingest:", res.status, await res.text());
-  } catch (e) {
-    console.error("Falha no /ingest (rede):", e.message);
-  }
+  // A ingestão inclui enriquecimento e pode ultrapassar o timeout das outras rotas.
+  const response = await requestJson(INGEST_ENDPOINT, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }, { timeoutMs: 50_000, tries: 1 });
+  requireOk(response, "ingest");
 }
 
 async function reportMetrics(source_id, total_mensagens, total_ofertas_extraidas) {
   try {
-    await fetchWithRetry(METRICS_ENDPOINT, {
+    const response = await requestJson(METRICS_ENDPOINT, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-ingest-secret": INGEST_SECRET },
       body: JSON.stringify({ source_id, total_mensagens, total_ofertas_extraidas }),
     });
-  } catch (e) {
-    console.error("Falha em /metrics:", e.message);
+    requireOk(response, "métricas");
+  } catch (err) {
+    console.error("Falha em /metrics:", err.message);
   }
 }
 
 const sources = await getSources();
-if (!sources.length) { console.log("Nenhum grupo ativo cadastrado. Encerrando."); process.exit(0); }
-
-const client = new TelegramClient(new StringSession(TG_SESSION), Number(API_ID), API_HASH, { connectionRetries: 3 });
-await client.connect();
-
-for (const src of sources) {
-  try {
-    const lastId = src.last_seen_id || 0;
-    const messages = await client.getMessages(src.telegram_ref, { limit: 40 });
-
-    // Baseline: se last_seen_id == 0, só grava o id mais recente sem processar nada.
-    if (lastId === 0) {
-      const maxId = messages.reduce((acc, m) => Math.max(acc, m.id), 0);
-      if (maxId > 0) await updateLastSeen(src.id, maxId);
-      await reportMetrics(src.id, 0, 0);
-      console.log(`Grupo ${src.telegram_ref}: baseline definido em id ${maxId} (sem processar).`);
-      continue;
-    }
-
-    const novas = messages.filter((m) => m.id > lastId).reverse(); // cronológico
-    let maxId = lastId;
-    let ofertas = 0;
-
-    for (const m of novas) {
-      const text = m.message || "";
-      const blocks = extractOfferBlocks(text);
-      if (blocks.length === 0) { maxId = Math.max(maxId, m.id); await updateLastSeen(src.id, maxId); continue; }
-
-      // Uma mensagem pode trazer várias HQs. Cada bloco segue isolado para o
-      // ingest: preço, cupom, IA e título são analisados por produto, sem o
-      // primeiro valor da mensagem contaminar os demais.
-      for (const [itemIndex, block] of blocks.entries()) {
-        await ingest({
-          source_id: String(src.id),
-          raw_text: block.text,
-          url: block.url,
-          price: parsePrice(block.text),
-          coupon_code: block.text.match(COUPON_RE)?.[1] || null,
-          coupon_conditions: block.text.match(COND_RE)?.[0] || null,
-          telegram_message_id: m.id,
-          telegram_chat_id: String(src.telegram_chat_id ?? src.telegram_ref),
-          telegram_item_index: itemIndex,
-        });
-        ofertas++;
-      }
-      maxId = Math.max(maxId, m.id);
-      await updateLastSeen(src.id, maxId);
-    }
-
-    await reportMetrics(src.id, novas.length, ofertas);
-    console.log(`Grupo ${src.telegram_ref}: ${novas.length} msg / ${ofertas} ofertas.`);
-  } catch (e) {
-    console.error(`Erro no grupo ${src.telegram_ref}:`, e.message);
-  }
+if (!sources.length) {
+  console.log("Nenhum grupo ativo cadastrado. Encerrando.");
+  process.exit(0);
 }
 
-await client.disconnect();
-process.exit(0);
+const client = new TelegramClient(new StringSession(TG_SESSION), Number(API_ID), API_HASH, {
+  connectionRetries: 3,
+  floodSleepThreshold: 15,
+});
+let failed = 0;
+try {
+  await client.connect();
+  const deadline = Date.now() + 9 * 60_000;
+  for (const [index, source] of sources.entries()) {
+    // Divide o tempo restante entre as fontes para um pico em uma delas não monopolizar a rodada.
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      failed++;
+      console.error("Tempo da rodada esgotado antes de verificar todas as fontes.");
+      break;
+    }
+    try {
+      const result = await processSource({
+        client,
+        source,
+        ingest,
+        checkpoint: updateLastSeen,
+        progress: reportMetrics,
+        deadline: Date.now() + Math.ceil(remaining / (sources.length - index)),
+      });
+      console.log(`Grupo ${source.telegram_ref}: ${JSON.stringify(result)}`);
+    } catch (err) {
+      failed++;
+      console.error(`Erro no grupo ${source.telegram_ref}:`, err.message);
+    }
+  }
+} finally {
+  await client.disconnect();
+}
+process.exit(failed ? 1 : 0);
