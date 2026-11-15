@@ -10,7 +10,7 @@
     "test": "node --test"
   },
   "dependencies": {
-    "telegram": "^2.22.2",
-    "input": "^1.0.1"
+    "input": "^1.0.1",
+    "telegram": "2.26.21"
   }
 }

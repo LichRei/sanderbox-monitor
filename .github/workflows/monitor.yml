@@ -1,6 +1,7 @@
 # .github/workflows/monitor.yml
 name: Sanderbox monitor
 on:
+  pull_request:
   schedule:
     - cron: "*/30 * * * *"   # a cada 30 minutos
   workflow_dispatch:
@@ -13,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     concurrency:
-      group: sanderbox-monitor
+      group: ${{ github.event_name == 'pull_request' && github.ref || 'sanderbox-monitor' }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v6
@@ -24,6 +25,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: node monitor.mjs
+        if: github.event_name != 'pull_request'
         env:
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
