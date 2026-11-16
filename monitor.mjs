@@ -12,6 +12,7 @@
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { processSource } from "./process-source.mjs";
+import { createRequestJson } from "./http-client.mjs";
 
 const {
   API_ID,
@@ -46,31 +47,14 @@ const appHeaders = {
   "x-ingest-secret": INGEST_SECRET,
 };
 
-async function requestJson(url, init, { timeoutMs = 15_000, tries = 2 } = {}) {
-  for (let i = 0; i < tries; i++) {
-    try {
-      const res = await fetch(url, {
-        ...init,
-        headers: appHeaders,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      if (res.status >= 500) throw new Error(`HTTP ${res.status}`);
-      // Não repetir erros permanentes nem ingestão em andamento.
-      if (!res.ok) return { status: res.status, body: null };
-      return { status: res.status, body: await res.json() };
-    } catch (err) {
-      if (i === tries - 1) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 800));
-    }
-  }
-}
+const requestJson = createRequestJson({ headers: appHeaders });
 
 function requireOk(response, endpoint) {
   if (response.body?.ok !== true) throw new Error(`${endpoint}: HTTP ${response.status} sem confirmação`);
 }
 
 async function getSources() {
-  const { body, status } = await requestJson(SOURCES_ENDPOINT);
+  const { body, status } = await requestJson(SOURCES_ENDPOINT, undefined, { operation: "sources/read", retrySafe: true });
   const sources = Array.isArray(body) ? body : body?.sources;
   if (!Array.isArray(sources)) throw new Error(`Falha ao buscar fontes: HTTP ${status}`);
   return sources;
@@ -80,16 +64,21 @@ async function updateLastSeen(id, lastSeenId) {
   const response = await requestJson(SOURCES_ENDPOINT, {
     method: "POST",
     body: JSON.stringify({ source_id: id, last_seen_id: lastSeenId }),
-  });
+  }, { operation: "sources/checkpoint", retrySafe: true });
   requireOk(response, "checkpoint");
 }
 
-async function ingest(payload) {
+async function ingest(payload, deadline) {
   // A ingestão inclui enriquecimento e pode ultrapassar o timeout das outras rotas.
   const response = await requestJson(INGEST_ENDPOINT, {
     method: "POST",
     body: JSON.stringify(payload),
-  }, { timeoutMs: 50_000, tries: 1 });
+  }, {
+    operation: "ingest", timeoutMs: 50_000, deadline,
+    // The backend deduplicates by chat/message/item and returns 409 for an active claim.
+    retrySafe: !!payload.telegram_chat_id && Number.isInteger(payload.telegram_message_id)
+      && Number.isInteger(payload.telegram_item_index),
+  });
   requireOk(response, "ingest");
 }
 
@@ -98,7 +87,7 @@ async function reportMetrics(source_id, total_mensagens, total_ofertas_extraidas
     const response = await requestJson(METRICS_ENDPOINT, {
       method: "POST",
       body: JSON.stringify({ source_id, total_mensagens, total_ofertas_extraidas }),
-    });
+    }, { operation: "metrics", retrySafe: false });
     requireOk(response, "métricas");
   } catch (err) {
     console.error("Falha em /metrics:", err.message);
