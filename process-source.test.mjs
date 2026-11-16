@@ -57,3 +57,13 @@ test("uma fonte nova apenas registra o primeiro checkpoint", async () => {
   });
   assert.equal(result.baseline, 24);
 });
+
+test("ingestão em andamento preserva checkpoint e recebe prazo da fonte", async () => {
+  let checkpointCalled = false;
+  await assert.rejects(processSource({
+    client: { async *iterMessages() { yield message(2, link); } }, source,
+    ingest: async (_payload, deadline) => { assert.equal(deadline, Infinity); throw new Error('ingest: HTTP 409 sem confirmação'); },
+    checkpoint: async () => { checkpointCalled = true; }, progress: async () => {}, deadline: Infinity,
+  }), /409/);
+  assert.equal(checkpointCalled, false);
+});
