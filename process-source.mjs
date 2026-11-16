@@ -47,7 +47,7 @@ export async function processSource({ client, source, ingest, checkpoint, progre
           telegram_message_id: message.id,
           telegram_chat_id: String(source.telegram_chat_id ?? source.telegram_ref),
           telegram_item_index: index,
-        });
+        }, deadline);
         accepted++;
       }
       lastId = message.id;
