@@ -11,7 +11,7 @@ function parsePrice(text) {
   return Number.isFinite(price) && price > 0 ? price : null;
 }
 
-export async function processSource({ client, source, ingest, checkpoint, progress, deadline }) {
+export async function processSource({ client, source, ingest, checkpoint, progress, deadline, minIngestBudgetMs = 0 }) {
   let lastId = Number(source.last_seen_id) || 0;
   if (lastId === 0) {
     const [latest] = await client.getMessages(source.telegram_ref, { limit: 1 });
@@ -33,7 +33,7 @@ export async function processSource({ client, source, ingest, checkpoint, progre
       if (message.id <= lastId) continue;
       const blocks = extractOfferBlocks(message.message || "");
       for (const [index, block] of blocks.entries()) {
-        if (Date.now() >= deadline) {
+        if (deadline - Date.now() <= minIngestBudgetMs) {
           partial = true;
           return { messages, accepted, partial };
         }

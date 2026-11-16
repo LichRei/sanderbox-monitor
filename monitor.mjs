@@ -48,6 +48,7 @@ const appHeaders = {
 };
 
 const requestJson = createRequestJson({ headers: appHeaders });
+const INGEST_TIMEOUT_MS = 50_000;
 
 function requireOk(response, endpoint) {
   if (response.body?.ok !== true) throw new Error(`${endpoint}: HTTP ${response.status} sem confirmação`);
@@ -74,7 +75,7 @@ async function ingest(payload, deadline) {
     method: "POST",
     body: JSON.stringify(payload),
   }, {
-    operation: "ingest", timeoutMs: 50_000, deadline,
+    operation: "ingest", timeoutMs: INGEST_TIMEOUT_MS, deadline,
     // The backend deduplicates by chat/message/item and returns 409 for an active claim.
     retrySafe: !!payload.telegram_chat_id && Number.isInteger(payload.telegram_message_id)
       && Number.isInteger(payload.telegram_item_index),
@@ -126,6 +127,8 @@ try {
         client,
         source,
         ingest,
+        // Não comece uma escrita que o prazo da fonte abortaria prematuramente.
+        minIngestBudgetMs: INGEST_TIMEOUT_MS,
         checkpoint: updateLastSeen,
         progress: reportMetrics,
         deadline: Date.now() + Math.ceil(remaining / (sources.length - index)),

@@ -67,3 +67,35 @@ test("ingestão em andamento preserva checkpoint e recebe prazo da fonte", async
   }), /409/);
   assert.equal(checkpointCalled, false);
 });
+
+test('reserva uma janela inteira antes de iniciar ingestão, sem abortar no limite da fonte', async () => {
+  let calls = 0;
+  const checkpoints = [];
+  const originalNow = Date.now;
+  let now = 0;
+  Date.now = () => now;
+  try {
+    const result = await processSource({
+      client: { async *iterMessages() { yield message(2, link); yield message(3, link); } },
+      source, deadline: 70_000, minIngestBudgetMs: 50_000,
+      ingest: async () => { calls++; now += 30_000; },
+      checkpoint: async (_id, last) => checkpoints.push(last), progress: async () => {},
+    });
+    assert.deepEqual(result, { messages: 1, accepted: 1, partial: true });
+    assert.equal(calls, 1);
+    assert.deepEqual(checkpoints, [2]);
+  } finally { Date.now = originalNow; }
+});
+
+test('não avança mensagem com múltiplas ofertas quando só parte cabe no orçamento', async () => {
+  const originalNow = Date.now; let now = 0; Date.now = () => now;
+  try {
+    const result = await processSource({
+      client: { async *iterMessages() { yield message(2, `Oferta 1\n${link}\nOferta 2\nhttps://meli.la/def`); } },
+      source, deadline: 70_000, minIngestBudgetMs: 50_000,
+      ingest: async () => { now += 30_000; },
+      checkpoint: async () => assert.fail('não pode confirmar mensagem parcial'), progress: async () => {},
+    });
+    assert.deepEqual(result, { messages: 0, accepted: 1, partial: true });
+  } finally { Date.now = originalNow; }
+});
