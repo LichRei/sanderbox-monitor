@@ -13,6 +13,7 @@ import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { processSource } from "./process-source.mjs";
 import { createRequestJson } from "./http-client.mjs";
+import { recoverPartials } from "./recover-partials.mjs";
 
 const {
   API_ID,
@@ -109,6 +110,7 @@ let failed = 0;
 try {
   await client.connect();
   const deadline = Date.now() + 9 * 60_000;
+  const pendingIds = new Set();
   for (const [index, source] of sources.entries()) {
     // Divide o tempo restante entre as fontes para um pico em uma delas não monopolizar a rodada.
     const remaining = deadline - Date.now();
@@ -134,12 +136,36 @@ try {
         deadline: Date.now() + Math.ceil(remaining / (sources.length - index)),
       });
       console.log(`Grupo ${source.telegram_ref}: ${JSON.stringify(result)}`);
+      if (result.partial) pendingIds.add(String(source.id));
     } catch (err) {
       failed++;
       console.error(`Erro no grupo ${source.telegram_ref}:`, err.message);
+    }
+  }
+  if (TELEGRAM_READ_ONLY !== "1") {
+    try {
+      await recoverPartials({
+        pendingIds, getSources, deadline, minBudgetMs: INGEST_TIMEOUT_MS,
+        process: async (source, sourceDeadline) => {
+          try {
+            const result = await processSource({
+              client, source, ingest, checkpoint: updateLastSeen, progress: reportMetrics,
+              minIngestBudgetMs: INGEST_TIMEOUT_MS, deadline: sourceDeadline,
+            });
+            console.log(`Recuperação ${source.telegram_ref}: ${JSON.stringify(result)}`);
+          } catch (err) {
+            failed++;
+            console.error(`Erro na recuperação ${source.telegram_ref}:`, err.message);
+          }
+        },
+      });
+    } catch (err) {
+      failed++;
+      console.error("Erro ao preparar recuperação:", err.message);
     }
   }
 } finally {
   await client.disconnect();
 }
 process.exit(failed ? 1 : 0);
+
