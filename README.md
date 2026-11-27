@@ -14,8 +14,8 @@ Monitor de ofertas do Telegram, executado pelo GitHub Actions a cada 30 minutos.
 - Antes de começar uma oferta, o monitor reserva uma janela inteira de 50 segundos. Se o orçamento da fonte não comportar a janela, registra `partial: true`, preserva a mensagem não confirmada e retoma no próximo ciclo. Isso evita abortar uma nova escrita apenas por começar perto do fim do orçamento; não resolve lentidão do backend. Acompanhe fontes repetidamente parciais para detectar acúmulo.
 - O prazo da fonte limita a ingestão e suas tentativas. Falha persistente continua causando saída 1; não é ocultada.
 - A primeira passagem divide 9 minutos entre as fontes. Se houver fontes parciais, a segunda passagem pode usar o tempo restante até completar 16 minutos desde o início do processamento. Recarrega checkpoints confirmados, ignora fontes removidas e preserva a janela segura de 50 segundos. Uma recuperação que termina parcial gera um aviso no GitHub Actions. Há no máximo uma recuperação por fonte; falhas continuam visíveis e o modo somente leitura não ingere ofertas.
-- Métricas não são repetidas, pois podem incrementar contadores sem chave idempotente.
-- Os logs identificam a operação (`ingest`, `sources/read`, `sources/checkpoint`, `metrics`) e a tentativa, sem imprimir payloads, respostas brutas, URLs ou credenciais.
+- O monitor informa quantas mensagens concluiu. O campo `accepted` no log inclui itens filtrados e duplicados. Só o backend incrementa o contador de ofertas criadas.
+- Os logs identificam a operação (`ingest`, `sources/read`, `sources/checkpoint`, `metrics`) e a tentativa. Na ingestão, incluem o número da mensagem e o índice do item, sem imprimir payloads, respostas brutas, URLs ou credenciais.
 
 Isso reduz falhas transitórias, mas não garante disponibilidade do backend nem informa a causa interna de um HTTP 500. Para isso, correlacione horário e operação com os logs do app.
 

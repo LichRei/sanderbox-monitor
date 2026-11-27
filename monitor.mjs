@@ -72,23 +72,25 @@ async function updateLastSeen(id, lastSeenId) {
 
 async function ingest(payload, deadline) {
   // A ingestão inclui enriquecimento e pode ultrapassar o timeout das outras rotas.
+  const retrySafe = !!payload.telegram_chat_id && Number.isSafeInteger(payload.telegram_message_id)
+    && Number.isSafeInteger(payload.telegram_item_index);
+  const operation = retrySafe ? `ingest mensagem ${payload.telegram_message_id} item ${payload.telegram_item_index}` : "ingest";
   const response = await requestJson(INGEST_ENDPOINT, {
     method: "POST",
     body: JSON.stringify(payload),
   }, {
-    operation: "ingest", timeoutMs: INGEST_TIMEOUT_MS, deadline,
+    operation, timeoutMs: INGEST_TIMEOUT_MS, deadline,
     // The backend deduplicates by chat/message/item and returns 409 for an active claim.
-    retrySafe: !!payload.telegram_chat_id && Number.isInteger(payload.telegram_message_id)
-      && Number.isInteger(payload.telegram_item_index),
+    retrySafe,
   });
-  requireOk(response, "ingest");
+  requireOk(response, operation);
 }
 
-async function reportMetrics(source_id, total_mensagens, total_ofertas_extraidas) {
+async function reportMetrics(source_id, total_mensagens) {
   try {
     const response = await requestJson(METRICS_ENDPOINT, {
       method: "POST",
-      body: JSON.stringify({ source_id, total_mensagens, total_ofertas_extraidas }),
+      body: JSON.stringify({ source_id, total_mensagens }),
     }, { operation: "metrics", retrySafe: false });
     requireOk(response, "métricas");
   } catch (err) {
