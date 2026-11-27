@@ -17,7 +17,7 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     concurrency:
       group: ${{ github.event_name == 'pull_request' && github.ref || 'sanderbox-monitor' }}
       cancel-in-progress: false
