@@ -43,5 +43,15 @@ export function extractOfferBlocks(text) {
     blocks[blocks.length - 1].text = `${blocks[blocks.length - 1].text}\n${trailing}`.trim();
   }
 
+  // Uma condição anunciada para os valores abaixo também vale para os links seguintes.
+  if (blocks.length > 1) {
+    const shared = lines.filter(line => /\b(?:valores|pre[çc]os)\s+(?:abaixo|a seguir)\b/i.test(line) && /\bcarrinho\b/i.test(line))
+      .map(line => line.replace(URL_RE, "").trim());
+    for (const block of blocks) {
+      for (const line of shared) {
+        if (!block.text.includes(line)) block.text += `\n${line}`;
+      }
+    }
+  }
   return blocks;
 }
