@@ -109,11 +109,12 @@ const client = new TelegramClient(new StringSession(TG_SESSION), Number(API_ID),
 let failed = 0;
 try {
   await client.connect();
-  const deadline = Date.now() + 9 * 60_000;
+  const firstPassDeadline = Date.now() + 9 * 60_000;
+  const recoveryDeadline = firstPassDeadline + 7 * 60_000;
   const pendingIds = new Set();
   for (const [index, source] of sources.entries()) {
     // Divide o tempo restante entre as fontes para um pico em uma delas não monopolizar a rodada.
-    const remaining = deadline - Date.now();
+    const remaining = firstPassDeadline - Date.now();
     if (remaining <= 0) {
       failed++;
       console.error("Tempo da rodada esgotado antes de verificar todas as fontes.");
@@ -145,7 +146,7 @@ try {
   if (TELEGRAM_READ_ONLY !== "1") {
     try {
       await recoverPartials({
-        pendingIds, getSources, deadline, minBudgetMs: INGEST_TIMEOUT_MS,
+        pendingIds, getSources, deadline: recoveryDeadline, minBudgetMs: INGEST_TIMEOUT_MS,
         process: async (source, sourceDeadline) => {
           try {
             const result = await processSource({
@@ -153,6 +154,9 @@ try {
               minIngestBudgetMs: INGEST_TIMEOUT_MS, deadline: sourceDeadline,
             });
             console.log(`Recuperação ${source.telegram_ref}: ${JSON.stringify(result)}`);
+            if (result.partial) {
+              console.warn("::warning::Uma fonte terminou a recuperação com mensagens restantes. Veja o resultado da recuperação no log.");
+            }
           } catch (err) {
             failed++;
             console.error(`Erro na recuperação ${source.telegram_ref}:`, err.message);
